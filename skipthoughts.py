@@ -2,6 +2,7 @@
 Skip-thought vectors
 '''
 import os
+import warnings
 
 import theano
 import theano.tensor as tensor
@@ -20,8 +21,8 @@ profile = False
 #-----------------------------------------------------------------------------#
 # Specify model and table locations here
 #-----------------------------------------------------------------------------#
-path_to_models = '/u/rkiros/public_html/models/'
-path_to_tables = '/u/rkiros/public_html/models/'
+path_to_models = './data/'
+path_to_tables = './data/'
 #-----------------------------------------------------------------------------#
 
 path_to_umodel = path_to_models + 'uni_skip.npz'
