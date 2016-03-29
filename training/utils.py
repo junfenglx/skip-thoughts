@@ -1,6 +1,8 @@
 """
 Helper functions for skip-thoughts
 """
+import warnings
+
 import theano
 import theano.tensor as tensor
 import numpy
