@@ -24,7 +24,7 @@ from model import init_params, build_model
 from vocab import load_dictionary
 
 # main trainer
-def trainer(X, 
+def trainer(X,
             dim_word=620, # word vector dimensionality
             dim=2400, # the number of GRU units
             encoder='gru',
@@ -47,7 +47,7 @@ def trainer(X,
     model_options['dim_word'] = dim_word
     model_options['dim'] = dim
     model_options['encoder'] = encoder
-    model_options['decoder'] = decoder 
+    model_options['decoder'] = decoder
     model_options['max_epochs'] = max_epochs
     model_options['dispFreq'] = dispFreq
     model_options['decay_c'] = decay_c
@@ -81,11 +81,13 @@ def trainer(X,
     word_idict[1] = 'UNK'
 
     print 'Building model'
+    # initializes matrix weights W and vector bias b
     params = init_params(model_options)
     # reload parameters
     if reload_ and os.path.exists(saveto):
         params = load_params(saveto, params)
 
+    # creates Theano shared variables
     tparams = init_tparams(params)
 
     trng, x, x_mask, y, y_mask, z, z_mask, \
@@ -154,7 +156,7 @@ def trainer(X,
 
             x, x_mask, y, y_mask, z, z_mask = homogeneous_data.prepare_data(x, y, z, worddict, maxlen=maxlen_w, n_words=n_words)
 
-            if x == None:
+            if x is None:
                 print 'Minibatch with zero sample under length ', maxlen_w
                 uidx -= 1
                 continue
@@ -179,7 +181,7 @@ def trainer(X,
                 pkl.dump(model_options, open('%s.pkl'%saveto, 'wb'))
                 print 'Done'
 
-        print 'Seen %d samples'%n_samples
+        print 'Seen %d samples' % n_samples
 
 if __name__ == '__main__':
     pass

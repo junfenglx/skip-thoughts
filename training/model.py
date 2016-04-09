@@ -58,6 +58,7 @@ def build_model(tparams, options):
     n_timesteps = x.shape[0]
     n_timesteps_f = y.shape[0]
     n_timesteps_b = z.shape[0]
+    # n_samples is 1 ?
     n_samples = x.shape[1]
 
     # Word embedding (source)
@@ -73,6 +74,8 @@ def build_model(tparams, options):
     # Word embedding (ahead)
     embf = tparams['Wemb'][y.flatten()].reshape([n_timesteps_f, n_samples, options['dim_word']])
     embf_shifted = tensor.zeros_like(embf)
+    # right shift one word
+    # why?
     embf_shifted = tensor.set_subtensor(embf_shifted[1:], embf[:-1])
     embf = embf_shifted
 
@@ -94,6 +97,7 @@ def build_model(tparams, options):
 
     # compute word probabilities (ahead)
     logit = get_layer('ff')[1](tparams, projf[0], options, prefix='ff_logit', activ='linear')
+    # TODO
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1], logit_shp[2]]))
 

@@ -19,6 +19,7 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'gru': ('param_init_gru', 'gru_layer'),
           }
 
+
 def get_layer(name):
     """
     Return param init and feedforward functions for the given layer name
@@ -26,25 +27,28 @@ def get_layer(name):
     fns = layers[name]
     return (eval(fns[0]), eval(fns[1]))
 
+
 # Feedforward layer
 def param_init_fflayer(options, params, prefix='ff', nin=None, nout=None, ortho=True):
     """
     Affine transformation + point-wise nonlinearity
     """
-    if nin == None:
+    if nin is None:
         nin = options['dim_proj']
-    if nout == None:
+    if nout is None:
         nout = options['dim_proj']
-    params[_p(prefix,'W')] = norm_weight(nin, nout, ortho=ortho)
-    params[_p(prefix,'b')] = numpy.zeros((nout,)).astype('float32')
+    params[_p(prefix, 'W')] = norm_weight(nin, nout, ortho=ortho)
+    params[_p(prefix, 'b')] = numpy.zeros((nout,)).astype('float32')
 
     return params
+
 
 def fflayer(tparams, state_below, options, prefix='rconv', activ='lambda x: tensor.tanh(x)', **kwargs):
     """
     Feedforward pass
     """
-    return eval(activ)(tensor.dot(state_below, tparams[_p(prefix,'W')])+tparams[_p(prefix,'b')])
+    return eval(activ)(tensor.dot(state_below, tparams[_p(prefix, 'W')]) + tparams[_p(prefix, 'b')])
+
 
 # GRU layer
 def param_init_gru(options, params, prefix='gru', nin=None, dim=None):
@@ -55,65 +59,96 @@ def param_init_gru(options, params, prefix='gru', nin=None, dim=None):
         nin = options['dim_proj']
     if dim == None:
         dim = options['dim_proj']
-    W = numpy.concatenate([norm_weight(nin,dim),
-                           norm_weight(nin,dim)], axis=1)
-    params[_p(prefix,'W')] = W
-    params[_p(prefix,'b')] = numpy.zeros((2 * dim,)).astype('float32')
+
+    # concat two (W, U, b) ?
+    W = numpy.concatenate([norm_weight(nin, dim),
+                           norm_weight(nin, dim)], axis=1)
+    params[_p(prefix, 'W')] = W
+    params[_p(prefix, 'b')] = numpy.zeros((2 * dim,)).astype('float32')
     U = numpy.concatenate([ortho_weight(dim),
                            ortho_weight(dim)], axis=1)
-    params[_p(prefix,'U')] = U
+    params[_p(prefix, 'U')] = U
 
     Wx = norm_weight(nin, dim)
-    params[_p(prefix,'Wx')] = Wx
+    params[_p(prefix, 'Wx')] = Wx
     Ux = ortho_weight(dim)
-    params[_p(prefix,'Ux')] = Ux
-    params[_p(prefix,'bx')] = numpy.zeros((dim,)).astype('float32')
+    params[_p(prefix, 'Ux')] = Ux
+    params[_p(prefix, 'bx')] = numpy.zeros((dim,)).astype('float32')
 
     return params
+
 
 def gru_layer(tparams, state_below, init_state, options, prefix='gru', mask=None, **kwargs):
     """
     Feedforward pass through GRU
     """
+    # nsteps is n_timesteps
     nsteps = state_below.shape[0]
     if state_below.ndim == 3:
+        # n_samples is 1 ?
         n_samples = state_below.shape[1]
     else:
         n_samples = 1
 
-    dim = tparams[_p(prefix,'Ux')].shape[1]
+    # the size of the hidden state
+    dim = tparams[_p(prefix, 'Ux')].shape[1]
 
-    if init_state == None:
+    if init_state is None:
         init_state = tensor.alloc(0., n_samples, dim)
 
-    if mask == None:
+    if mask is None:
         mask = tensor.alloc(1., state_below.shape[0], 1)
 
     def _slice(_x, n, dim):
         if _x.ndim == 3:
-            return _x[:, :, n*dim:(n+1)*dim]
-        return _x[:, n*dim:(n+1)*dim]
+            return _x[:, :, n * dim:(n + 1) * dim]
+        return _x[:, n * dim:(n + 1) * dim]
 
+    # W_{rz} \cdot x
     state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + tparams[_p(prefix, 'b')]
+    # W \cdot x
     state_belowx = tensor.dot(state_below, tparams[_p(prefix, 'Wx')]) + tparams[_p(prefix, 'bx')]
     U = tparams[_p(prefix, 'U')]
     Ux = tparams[_p(prefix, 'Ux')]
 
     def _step_slice(m_, x_, xx_, h_, U, Ux):
+        """
+
+        :param m_: mask
+        :param x_: state_below_
+        :param xx_: state_belowx
+        :param h_: previous hidden state
+        :param U: horizontal stacked weight U
+        :param Ux: U weight for reset gate
+        :return: current hidden state
+        """
+
+        # U_{rz} \cdot h^{t-1}
         preact = tensor.dot(h_, U)
+        # add
         preact += x_
 
+        # r is reset gate
         r = tensor.nnet.sigmoid(_slice(preact, 0, dim))
+        # u is forget gate
         u = tensor.nnet.sigmoid(_slice(preact, 1, dim))
 
+        # U \cdot (r \odot h^{t-1})
         preactx = tensor.dot(h_, Ux)
         preactx = preactx * r
+        # add
         preactx = preactx + xx_
 
+        # h is the proposed state update
         h = tensor.tanh(preactx)
 
+        # get current step hidden state
         h = u * h_ + (1. - u) * h
-        h = m_[:,None] * h + (1. - m_)[:,None] * h_
+
+        # m_[:, None] is same as m_[:, numpy.newaxis]
+        # to create an axis of length one
+        # apply mask to current hidden state
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
 
         return h
 
@@ -122,14 +157,12 @@ def gru_layer(tparams, state_below, init_state, options, prefix='gru', mask=None
 
     rval, updates = theano.scan(_step,
                                 sequences=seqs,
-                                outputs_info = [init_state],
-                                non_sequences = [tparams[_p(prefix, 'U')],
-                                                 tparams[_p(prefix, 'Ux')]],
+                                outputs_info=[init_state],
+                                non_sequences=[tparams[_p(prefix, 'U')],
+                                               tparams[_p(prefix, 'Ux')]],
                                 name=_p(prefix, '_layers'),
                                 n_steps=nsteps,
                                 profile=False,
                                 strict=True)
     rval = [rval]
     return rval
-
-
