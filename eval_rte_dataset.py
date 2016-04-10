@@ -24,6 +24,7 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.cross_validation import StratifiedKFold
 from sklearn.externals import joblib
 from sklearn.metrics import accuracy_score, log_loss
@@ -143,8 +144,67 @@ def read_rte_from_nltk(model, version=3):
 
     return X_train, X_test, train_labels, test_labels
 
-if __name__ == '__main__':
 
+def logistic_test():
+    logger.info('using logistic regression')
+    logger.info('read model ...')
+    n_components = None
+    C = 10
+    model = read_model()
+    X_train_all = []
+    X_test_all = []
+    train_labels_all = []
+    test_labels_all = []
+    for version in range(1, 4):
+        logger.info('loading version {0} data ...'.format(version))
+        X_train, X_test, train_labels, test_labels = read_rte_from_nltk(model, version=version)
+        X_train_all.append(X_train)
+        X_test_all.append(X_test)
+        train_labels_all.append(train_labels)
+        test_labels_all.append(test_labels)
+        logger.info('X_train.shape: {0}'.format(X_train.shape))
+        logger.info('X_test.shape: {0}'.format(X_test.shape))
+        # pca = PCA(n_components=n_components)
+        # X_train = pca.fit_transform(X_train)
+        # X_test = pca.transform(X_test)
+        # logger.info('After PCA')
+        # logger.info('X_train.shape: {0}'.format(X_train.shape))
+        # logger.info('X_test.shape: {0}'.format(X_test.shape))
+        logreg = LogisticRegression(C=C, n_jobs=10, random_state=919)
+        logreg.fit(X_train, train_labels)
+        y_test_predicted = logreg.predict(X_test)
+        y_test_proba = logreg.predict_proba(X_test)
+        acc = accuracy_score(test_labels, y_test_predicted)
+        logger.info('evaluate at RTE {0} dataset'.format(version))
+        logger.info('test data predicted accuracy: {0}'.format(acc))
+        logloss = log_loss(test_labels, y_test_proba)
+        logger.info('log loss at test data: {0}'.format(logloss))
+
+    X_train_all = np.concatenate(X_train_all)
+    X_test_all = np.concatenate(X_test_all)
+    train_labels_all = np.concatenate(train_labels_all)
+    test_labels_all = np.concatenate(test_labels_all)
+    logger.info('X_train_all.shape: {0}'.format(X_train_all.shape))
+    logger.info('X_test_all.shape: {0}'.format(X_test_all.shape))
+    # pca = PCA(n_components=n_components)
+    # X_train_all = pca.fit_transform(X_train_all)
+    # X_test_all = pca.transform(X_test_all)
+    # logger.info('After PCA')
+    # logger.info('X_train_all.shape: {0}'.format(X_train_all.shape))
+    # logger.info('X_test_all.shape: {0}'.format(X_test_all.shape))
+    logreg = LogisticRegression(C=C, n_jobs=10, random_state=919)
+    logreg.fit(X_train_all, train_labels_all)
+    y_test_all_predicted = logreg.predict(X_test_all)
+    y_test_all_proba = logreg.predict_proba(X_test_all)
+    acc = accuracy_score(test_labels_all, y_test_all_predicted)
+    logger.info('evaluate at RTE combined dataset')
+    logger.info('test data predicted accuracy: {0}'.format(acc))
+    logloss = log_loss(test_labels_all, y_test_all_proba)
+    logger.info('log loss at test data: {0}'.format(logloss))
+
+
+
+def random_forest_test():
     logger.info('read model ...')
     n_components = 256
     model = read_model()
@@ -198,3 +258,6 @@ if __name__ == '__main__':
     logger.info('test data predicted accuracy: {0}'.format(acc))
     logloss = log_loss(test_labels_all, y_test_all_proba)
     logger.info('log loss at test data: {0}'.format(logloss))
+
+if __name__ == '__main__':
+    logistic_test()
