@@ -202,8 +202,10 @@ class RTE2Cosine(object):
         return train_data, test_data
 
 
-def logistic_test_using_cosine():
+def logistic_test_using_cosine(score_feature=True):
     logger.info('using cosine features in logistic regression')
+    if score_feature:
+        logger.info('also use score feature')
     Cs = [2**t for t in range(0, 10, 1)]
     Cs.extend([3**t for t in range(1, 10, 1)])
     rte2cosine = RTE2Cosine('/home/junfeng/word2vec/GoogleNews-vectors-negative300.bin')
@@ -215,13 +217,17 @@ def logistic_test_using_cosine():
         logger.info('loading version {0} data ...'.format(version))
         rte_data = rte_utils.read_rte_from_nltk(version=version)
         X_train, X_test = rte2cosine.calculate_cosine_features(rte_data, version)
+
         train_labels = rte_data.train_df.label.values
         test_labels = rte_data.test_df.label.values
-
         X_train_all.append(X_train)
         X_test_all.append(X_test)
         train_labels_all.append(train_labels)
         test_labels_all.append(test_labels)
+        if score_feature:
+            y_train_proba, y_test_proba = joblib.load('./rte_data/logistic_score_rte{0}.pkl'.format(version))
+            X_train = np.concatenate([X_train, y_train_proba.reshape((-1, 1))], axis=1)
+            X_test = np.concatenate([X_test, y_test_proba.reshape((-1, 1))], axis=1)
         logger.info('X_train.shape: {0}'.format(X_train.shape))
         logger.info('X_test.shape: {0}'.format(X_test.shape))
 
@@ -235,6 +241,10 @@ def logistic_test_using_cosine():
 
     X_train_all = np.concatenate(X_train_all)
     X_test_all = np.concatenate(X_test_all)
+    if score_feature:
+        y_train_all_proba, y_test_all_proba = joblib.load('./rte_data/logistic_score_rte_all.pkl')
+        X_train_all = np.concatenate([X_train_all, y_train_all_proba.reshape((-1, 1))], axis=1)
+        X_test_all = np.concatenate([X_test_all, y_test_all_proba.reshape((-1, 1))], axis=1)
     train_labels_all = np.concatenate(train_labels_all)
     test_labels_all = np.concatenate(test_labels_all)
     logger.info('X_train_all.shape: {0}'.format(X_train_all.shape))
@@ -249,8 +259,10 @@ def logistic_test_using_cosine():
     logger.info('test data predicted accuracy: {0}'.format(acc))
 
 
-def logistic_test():
+def logistic_test(cosine_feature=True):
     logger.info('using logistic regression')
+    if cosine_feature:
+        logger.info('also use cosine feature')
     logger.info('read model ...')
     n_components = None
     Cs = [2**t for t in range(0, 10, 1)]
@@ -264,14 +276,17 @@ def logistic_test():
     test_labels_all = []
     for version in range(1, 4):
         logger.info('loading version {0} data ...'.format(version))
-        rte_data = rte_utils.read_rte_from_nltk(version=version)
-        train_cosine, test_cosine = rte2cosine.calculate_cosine_features(rte_data, version)
+        train_cosine, test_cosine = None, None
+        if cosine_feature:
+            rte_data = rte_utils.read_rte_from_nltk(version=version)
+            train_cosine, test_cosine = rte2cosine.calculate_cosine_features(rte_data, version)
         X_train, X_test, train_labels, test_labels = read_rte_from_nltk(model, version=version)
         vectorized_train_ts = X_train[:, :4800]
         vectorized_train_hs = X_train[:, 4800:]
         X_train = np.abs(vectorized_train_ts - vectorized_train_hs)
         X_train = np.concatenate([X_train, vectorized_train_ts * vectorized_train_hs], axis=1)
-        X_train = np.concatenate([X_train, train_cosine], axis=1)
+        if cosine_feature:
+            X_train = np.concatenate([X_train, train_cosine], axis=1)
         # train_cosine_similarity = np.concatenate(
         #         map(pairwise.cosine_similarity, vectorized_train_ts, vectorized_train_hs)
         # )
@@ -280,7 +295,8 @@ def logistic_test():
         vectorized_test_hs = X_test[:, 4800:]
         X_test = np.abs(vectorized_test_ts - vectorized_test_hs)
         X_test = np.concatenate([X_test, vectorized_test_ts * vectorized_test_hs], axis=1)
-        X_test = np.concatenate([X_test, test_cosine], axis=1)
+        if cosine_feature:
+            X_test = np.concatenate([X_test, test_cosine], axis=1)
         # test_cosine_similarity = np.concatenate(
         #         map(pairwise.cosine_similarity, vectorized_test_ts, vectorized_test_hs)
         # )
@@ -309,6 +325,14 @@ def logistic_test():
         # logloss = log_loss(test_labels, y_test_proba)
         # logger.info('log loss at test data: {0}'.format(logloss))
 
+        # save predicted score as another experience feature
+        if not cosine_feature:
+            y_train_proba = logreg.predict_proba(X_train)
+            y_train_proba = y_train_proba[:, :1]
+            y_test_proba = y_test_proba[:, :1]
+            logger.info('save score ...')
+            joblib.dump((y_train_proba, y_test_proba), './rte_data/logistic_score_rte{0}.pkl'.format(version))
+
     X_train_all = np.concatenate(X_train_all)
     X_test_all = np.concatenate(X_test_all)
     train_labels_all = np.concatenate(train_labels_all)
@@ -331,6 +355,14 @@ def logistic_test():
     logger.info('test data predicted accuracy: {0}'.format(acc))
     # logloss = log_loss(test_labels_all, y_test_all_proba)
     # logger.info('log loss at test data: {0}'.format(logloss))
+
+    # save predicted score as another experience feature
+    if not cosine_feature:
+        y_train_all_proba = logreg.predict_proba(X_train_all)
+        logger.info('save score ...')
+        y_train_all_proba = y_train_all_proba[:, :1]
+        y_test_all_proba = y_test_all_proba[:, :1]
+        joblib.dump((y_train_all_proba, y_test_all_proba), './rte_data/logistic_score_rte_all.pkl')
 
 
 def random_forest_test():
@@ -389,4 +421,5 @@ def random_forest_test():
     logger.info('log loss at test data: {0}'.format(logloss))
 
 if __name__ == '__main__':
-    logistic_test()
+    logistic_test(cosine_feature=True)
+    # logistic_test_using_cosine(score_feature=False)

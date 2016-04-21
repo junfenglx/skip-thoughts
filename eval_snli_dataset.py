@@ -5,6 +5,8 @@
 # logging config
 import logging
 
+from gensim.models import Word2Vec
+
 logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
                     datefmt='%m/%d/%Y %I:%M:%S %p',
                     level=logging.DEBUG)
@@ -24,7 +26,7 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.cross_validation import StratifiedKFold, KFold
 from sklearn.externals import joblib
 from sklearn.metrics import accuracy_score, log_loss
@@ -220,6 +222,102 @@ def read_snli_from_csv(model):
     return X_train, X_test, train_labels, test_labels
 
 
+class SNLI2Cosine(object):
+
+    def __init__(self, word2vec_model_file):
+        self.model_file = word2vec_model_file
+        self.word2vec = None
+
+    def calculate_cosine_features(self, snli_train_df, snli_test_df):
+        train_saved_path = './snli/cosine-train.pkl'
+        test_saved_path = './snli/cosine-test.pkl'
+        if os.path.isfile(train_saved_path) and os.path.isfile(test_saved_path):
+            train_data, train_labels = joblib.load(train_saved_path)
+            test_data, test_labels = joblib.load(test_saved_path)
+            return train_data, train_labels, test_data, test_labels
+
+        if self.word2vec is None:
+            logger.info('loading pre-trained word2vec model ...')
+            self.word2vec = Word2Vec.load_word2vec_format(self.model_file, binary=True)
+
+        def handle(df):
+            data_cosines = np.empty((len(df), 2))
+            labels = []
+            for index, row in df.iterrows():
+                if index % 10000 == 0:
+                    logger.info('processed {0} rows'.format(index))
+                gold_label = row.gold_label
+                if gold_label == '-':
+                    raise ValueError('should first filter out sample  gold loabel is -')
+                elif gold_label == 'entailment':
+                    value = 1
+                else:
+                    value = 0
+                labels.append(value)
+                text = row.sentence1
+                hypothesis = row.sentence2
+                text = text.split()
+                hypothesis = hypothesis.split()
+                sims = np.zeros((len(text), len(hypothesis)))
+                for i, w1 in enumerate(text):
+                    for j, w2 in enumerate(hypothesis):
+                        if w1 not in self.word2vec or w2 not in self.word2vec:
+                            sim = 0.0
+                        else:
+                            sim = self.word2vec.similarity(w1, w2)
+                        sims[i, j] = sim
+                text_max_cosines = np.max(sims, axis=1)
+                text_mean_cosine = np.mean(text_max_cosines)
+                hypothesis_max_cosines = np.max(sims, axis=0)
+                hypothesis_mean_cosine = np.mean(hypothesis_max_cosines)
+                data_cosines[index, 0] = text_mean_cosine
+                data_cosines[index, 1] = hypothesis_mean_cosine
+            labels = np.array(labels)
+            return data_cosines, labels
+
+        train_data, train_labels = handle(snli_train_df)
+        test_data, test_labels = handle(snli_test_df)
+        joblib.dump((train_data, train_labels), train_saved_path)
+        joblib.dump((test_data, test_labels), test_saved_path)
+        return train_data, train_labels, test_data, test_labels
+
+
+def logistic_test_using_cosine(score_feature=False):
+    logger.info('using cosine features in logistic regression')
+    if score_feature:
+        logger.info('also use score feature')
+    Cs = [2**t for t in range(0, 10, 1)]
+    Cs.extend([3**t for t in range(1, 10, 1)])
+    snli2cosine = SNLI2Cosine('/home/junfeng/word2vec/GoogleNews-vectors-negative300.bin')
+    logger.info('loading snli data ...')
+    train_df = pd.read_csv('./snli/snli_1.0/snli_1.0_train.txt', delimiter='\t')
+    train_df = train_df[pd.notnull(train_df.sentence2)]
+    train_df = train_df[train_df.gold_label != '-']
+    train_df = train_df[:(len(train_df) / 3)]
+    train_df.reset_index(inplace=True)
+    test_df = pd.read_csv('./snli/snli_1.0/snli_1.0_test.txt', delimiter='\t')
+    test_df = test_df[pd.notnull(test_df.sentence2)]
+    test_df = test_df[test_df.gold_label != '-']
+    test_df.reset_index(inplace=True)
+    X_train, train_labels, X_test, test_labels = snli2cosine.calculate_cosine_features(train_df, test_df)
+    if score_feature:
+        y_train_proba, y_test_proba = joblib.load('./snli/logistic_score_snli.pkl')
+        # y_train_proba = y_train_proba.flatten()
+        # y_test_proba = y_test_proba.flatten()
+        X_train = np.concatenate([X_train, y_train_proba.reshape((-1, 1))], axis=1)
+        X_test = np.concatenate([X_test, y_test_proba.reshape((-1, 1))], axis=1)
+    logger.info('X_train.shape: {0}'.format(X_train.shape))
+    logger.info('X_test.shape: {0}'.format(X_test.shape))
+
+    logreg = LogisticRegressionCV(Cs=Cs, cv=3, n_jobs=10, random_state=919)
+    logreg.fit(X_train, train_labels)
+    logger.info('best C is {0}'.format(logreg.C_))
+    y_test_predicted = logreg.predict(X_test)
+    acc = accuracy_score(test_labels, y_test_predicted)
+    logger.info('test data predicted accuracy: {0}'.format(acc))
+
+
+
 def logistic_test():
     logger.info('using logistic regression')
     logger.info('read model ...')
@@ -326,4 +424,5 @@ def random_forest_test():
     logger.info('log loss at test data: {0}'.format(logloss))
 
 if __name__ == '__main__':
-    logistic_test()
+    # logistic_test()
+    logistic_test_using_cosine(score_feature=True)

@@ -18,6 +18,8 @@ import lasagne
 # logging config
 import logging
 
+from sklearn.externals import joblib
+
 logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
                     datefmt='%m/%d/%Y %I:%M:%S %p',
                     level=logging.DEBUG)
@@ -47,29 +49,29 @@ def build_mlp(input_var=None, n_features=4800):
     l_in = lasagne.layers.InputLayer(shape=(None, n_features),
                                      input_var=input_var)
 
-    # Apply 20% dropout to the input data:
-    l_in_drop = lasagne.layers.DropoutLayer(l_in, p=0.2)
-
-    # Add a fully-connected layer of 800 units, using the linear rectifier, and
-    # initializing weights with Glorot's scheme (which is the default anyway):
-    l_hid1 = lasagne.layers.DenseLayer(
-            l_in_drop, num_units=1200,
-            nonlinearity=lasagne.nonlinearities.rectify,
-            W=lasagne.init.GlorotUniform())
-
-    # We'll now add dropout of 50%:
-    l_hid1_drop = lasagne.layers.DropoutLayer(l_hid1, p=0.5)
-
-    # Another 800-unit layer:
-    l_hid2 = lasagne.layers.DenseLayer(
-            l_hid1_drop, num_units=600,
-            nonlinearity=lasagne.nonlinearities.rectify)
-
-    # 50% dropout again:
-    l_hid2_drop = lasagne.layers.DropoutLayer(l_hid2, p=0.5)
-    # Finally, we'll add the fully-connected output layer, of 1 sigmoid units:
+    # # Apply 20% dropout to the input data:
+    # l_in_drop = lasagne.layers.DropoutLayer(l_in, p=0.2)
+    #
+    # # Add a fully-connected layer of 800 units, using the linear rectifier, and
+    # # initializing weights with Glorot's scheme (which is the default anyway):
+    # l_hid1 = lasagne.layers.DenseLayer(
+    #         l_in_drop, num_units=1200,
+    #         nonlinearity=lasagne.nonlinearities.rectify,
+    #         W=lasagne.init.GlorotUniform())
+    #
+    # # We'll now add dropout of 50%:
+    # l_hid1_drop = lasagne.layers.DropoutLayer(l_hid1, p=0.5)
+    #
+    # # Another 800-unit layer:
+    # l_hid2 = lasagne.layers.DenseLayer(
+    #         l_hid1_drop, num_units=600,
+    #         nonlinearity=lasagne.nonlinearities.rectify)
+    #
+    # # 50% dropout again:
+    # l_hid2_drop = lasagne.layers.DropoutLayer(l_hid2, p=0.5)
+    # # Finally, we'll add the fully-connected output layer, of 1 sigmoid units:
     l_out = lasagne.layers.DenseLayer(
-            l_hid2_drop, num_units=1,
+            l_in, num_units=1,
             nonlinearity=lasagne.nonlinearities.sigmoid)
 
     # Each layer is linked to its incoming layer(s), so we only need to pass
@@ -92,7 +94,12 @@ def iterate_minibatches(inputs, targets, batch_size, shuffle=False):
     if shuffle:
         indices = np.arange(len(inputs))
         np.random.shuffle(indices)
-    for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
+    # n = len(inputs)
+    # n == batch_size * batch_iter + r
+    # for start_idx in range(0, batch_size * batch_iter + r - batch_size + 1, batch_size):
+    # max start_idx is batch_size * (batch_iter - 1)
+    # leave r samples not iterate
+    for start_idx in range(0, len(inputs), batch_size):
         if shuffle:
             excerpt = indices[start_idx:start_idx + batch_size]
         else:
@@ -172,13 +179,15 @@ class EvalRTE(object):
 # more functions to better separate the code, but it wouldn't make it any
 # easier to read.
 
-def run(model, num_epochs=100, batch_size=32):
+def run(model, num_epochs=93, batch_size=32, cosine_feature=False):
     # Load the dataset
     logger.info("Loading data...")
+    if cosine_feature:
+        logger.info('also use cosine feature')
     model = None
 
     X_train, X_test, train_labels, test_labels = eval_snli_dataset.read_snli_from_csv(model)
-    eval_rte = EvalRTE(num_epochs, batch_size)
+    # eval_rte = EvalRTE(num_epochs, batch_size)
     vectorized_train_ts = X_train[:, :4800]
     vectorized_train_hs = X_train[:, 4800:]
     # C = eval_kfold(vectorized_train_ts, vectorized_train_hs, None, train_labels)
@@ -200,8 +209,21 @@ def run(model, num_epochs=100, batch_size=32):
     # X_test = np.concatenate([X_test, test_cosine_similarity], axis=1)
     del vectorized_test_ts, vectorized_test_hs
 
+    if cosine_feature:
+        train_saved_path = './snli/cosine-train.pkl'
+        test_saved_path = './snli/cosine-test.pkl'
+        if os.path.isfile(train_saved_path) and os.path.isfile(test_saved_path):
+            logger.info('load cosine features ...')
+            train_cosine, train_labels = joblib.load(train_saved_path)
+            test_cosine, test_labels = joblib.load(test_saved_path)
+            train_cosine = train_cosine.astype('float32')
+            test_cosine = test_cosine.astype('float32')
+            X_train = np.concatenate([X_train, train_cosine], axis=1)
+            X_test = np.concatenate([X_test, test_cosine], axis=1)
+
     logger.info('X_train.shape: {0}'.format(X_train.shape))
     logger.info('X_test.shape: {0}'.format(X_test.shape))
+
     input_var = T.matrix('inputs')
     target_var = T.lvector('targets')
 
@@ -243,6 +265,9 @@ def run(model, num_epochs=100, batch_size=32):
 
     # Compile a second function computing the validation loss and accuracy:
     val_fn = theano.function([input_var, target_var], [test_loss, test_acc])
+
+    # don't preserve shape
+    predict_fn = theano.function([input_var], [test_prediction])
 
     # Finally, launch the training loop.
     print("Starting training...")
@@ -289,15 +314,17 @@ def run(model, num_epochs=100, batch_size=32):
             max_test_acc = val_acc
 
         # eval RTE datasets
-        eval_rte.eval_rte_when_train_snli(val_fn, epoch)
+        # eval_rte.eval_rte_when_train_snli(val_fn, epoch)
 
     # After training, we compute and print the test error:
     test_err = 0.
     test_acc = 0.
     test_batches = 0
+    y_test_proba = []
     for batch in iterate_minibatches(X_test, test_labels, batch_size, shuffle=False):
         inputs, targets = batch
         err, acc = val_fn(inputs, targets)
+        y_test_proba.append(predict_fn(inputs))
         test_err += err
         test_acc += acc
         test_batches += 1
@@ -308,6 +335,17 @@ def run(model, num_epochs=100, batch_size=32):
 
     print("  best test accuracy:\t\t{:.2f} %".format(max_test_acc * 100))
     print("  at epoch {0}".format(best_epoch + 1))
+    if not cosine_feature:
+        y_train_proba = []
+        for batch in iterate_minibatches(X_train, train_labels, batch_size, shuffle=False):
+            inputs, targets = batch
+            y_train_proba.append(predict_fn(inputs))
+        y_train_proba = np.concatenate(y_train_proba, axis=1)
+        y_test_proba = np.concatenate(y_test_proba, axis=1)
+        print('y_train_proba.shape: {}'.format(y_train_proba.shape))
+        print('y_test_proba.shape: {}'.format(y_test_proba.shape))
+        print('save score ...')
+        joblib.dump((y_train_proba, y_test_proba), './snli/logistic_score_snli.pkl')
 
     # Optionally, you could now dump the network weights to a file like this:
     # np.savez('model.npz', *lasagne.layers.get_all_param_values(network))
