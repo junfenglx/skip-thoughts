@@ -5,6 +5,8 @@
 # logging config
 import logging
 
+from gensim.models import Word2Vec
+
 logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
                     datefmt='%m/%d/%Y %I:%M:%S %p',
                     level=logging.DEBUG)
@@ -24,15 +26,18 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.cross_validation import StratifiedKFold
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.cross_validation import StratifiedKFold, KFold
 from sklearn.externals import joblib
 from sklearn.metrics import accuracy_score, log_loss
 from sklearn.decomposition import PCA
+from sklearn.metrics import pairwise
 
 import numpy as np
 
 import skipthoughts
+import rte_utils
+
 
 def read_rte_data():
     logger.info('read data ...')
@@ -78,7 +83,6 @@ def run():
     logger.info('mean log loss: {0}'.format(mean_logloss / n_folds))
 
 
-
 def get_sentence_sample(pairs):
     sample_length = len(pairs)
     logger.info('sample length: {0}'.format(sample_length))
@@ -107,13 +111,16 @@ def read_model():
     return model
 
 
-def read_rte_from_nltk(model, version=3):
+def read_rte_from_nltk(model=None, version=3):
     train_saved_path = './data/processed-rte{0}-train.pkl'.format(version)
     test_saved_path = './data/processed-rte{0}-test.pkl'.format(version)
     if os.path.isfile(train_saved_path) and os.path.isfile(test_saved_path):
         X_train, train_labels = joblib.load(train_saved_path)
         X_test, test_labels = joblib.load(test_saved_path)
         return X_train, X_test, train_labels, test_labels
+
+    if model is None:
+        model = read_model()
 
     from nltk.corpus import rte
     train_xml = 'rte{0}_dev.xml'.format(version)
@@ -145,19 +152,140 @@ def read_rte_from_nltk(model, version=3):
     return X_train, X_test, train_labels, test_labels
 
 
-def logistic_test():
-    logger.info('using logistic regression')
-    logger.info('read model ...')
-    n_components = None
-    C = 10
-    model = read_model()
+class RTE2Cosine(object):
+
+    def __init__(self, word2vec_model_file):
+        self.model_file = word2vec_model_file
+        self.word2vec = None
+
+    def calculate_cosine_features(self, rte_data, version=3):
+        train_saved_path = './rte_data/cosine-rte{0}-train.pkl'.format(version)
+        test_saved_path = './rte_data/cosine-rte{0}-test.pkl'.format(version)
+        if os.path.isfile(train_saved_path) and os.path.isfile(test_saved_path):
+            train_data = joblib.load(train_saved_path)
+            test_data = joblib.load(test_saved_path)
+            return train_data, test_data
+
+        if self.word2vec is None:
+            logger.info('loading pre-trained word2vec model ...')
+            self.word2vec = Word2Vec.load_word2vec_format(self.model_file, binary=True)
+
+        def handle(df):
+            data_cosines = np.empty((len(df), 2))
+            for index, row in df.iterrows():
+                text = row.text
+                hypothesis = row.hypothesis
+                text = text.split()
+                hypothesis = hypothesis.split()
+                sims = np.zeros((len(text), len(hypothesis)))
+                for i, w1 in enumerate(text):
+                    for j, w2 in enumerate(hypothesis):
+                        if w1 not in self.word2vec or w2 not in self.word2vec:
+                            sim = 0.0
+                        else:
+                            sim = self.word2vec.similarity(w1, w2)
+                        sims[i, j] = sim
+                text_max_cosines = np.max(sims, axis=1)
+                text_mean_cosine = np.mean(text_max_cosines)
+                hypothesis_max_cosines = np.max(sims, axis=0)
+                hypothesis_mean_cosine = np.mean(hypothesis_max_cosines)
+                data_cosines[index, 0] = text_mean_cosine
+                data_cosines[index, 1] = hypothesis_mean_cosine
+            return data_cosines
+
+        train_df = rte_data.train_df
+        test_df = rte_data.test_df
+        train_data = handle(train_df)
+        test_data = handle(test_df)
+        joblib.dump(train_data, train_saved_path)
+        joblib.dump(test_data, test_saved_path)
+        return train_data, test_data
+
+
+def logistic_test_using_cosine():
+    logger.info('using cosine features in logistic regression')
+    Cs = [2**t for t in range(0, 10, 1)]
+    Cs.extend([3**t for t in range(1, 10, 1)])
+    rte2cosine = RTE2Cosine('/home/junfeng/word2vec/GoogleNews-vectors-negative300.bin')
     X_train_all = []
     X_test_all = []
     train_labels_all = []
     test_labels_all = []
     for version in range(1, 4):
         logger.info('loading version {0} data ...'.format(version))
+        rte_data = rte_utils.read_rte_from_nltk(version=version)
+        X_train, X_test = rte2cosine.calculate_cosine_features(rte_data, version)
+        train_labels = rte_data.train_df.label.values
+        test_labels = rte_data.test_df.label.values
+
+        X_train_all.append(X_train)
+        X_test_all.append(X_test)
+        train_labels_all.append(train_labels)
+        test_labels_all.append(test_labels)
+        logger.info('X_train.shape: {0}'.format(X_train.shape))
+        logger.info('X_test.shape: {0}'.format(X_test.shape))
+
+        logreg = LogisticRegressionCV(Cs=Cs, cv=3, n_jobs=10, random_state=919)
+        logreg.fit(X_train, train_labels)
+        logger.info('best C is {0}'.format(logreg.C_))
+        y_test_predicted = logreg.predict(X_test)
+        acc = accuracy_score(test_labels, y_test_predicted)
+        logger.info('evaluate at RTE {0} dataset'.format(version))
+        logger.info('test data predicted accuracy: {0}'.format(acc))
+
+    X_train_all = np.concatenate(X_train_all)
+    X_test_all = np.concatenate(X_test_all)
+    train_labels_all = np.concatenate(train_labels_all)
+    test_labels_all = np.concatenate(test_labels_all)
+    logger.info('X_train_all.shape: {0}'.format(X_train_all.shape))
+    logger.info('X_test_all.shape: {0}'.format(X_test_all.shape))
+
+    logreg = LogisticRegressionCV(Cs=Cs, cv=3, n_jobs=10, random_state=919, verbose=1)
+    logreg.fit(X_train_all, train_labels_all)
+    logger.info('best C is {0}'.format(logreg.C_))
+    y_test_all_predicted = logreg.predict(X_test_all)
+    acc = accuracy_score(test_labels_all, y_test_all_predicted)
+    logger.info('evaluate at RTE combined dataset')
+    logger.info('test data predicted accuracy: {0}'.format(acc))
+
+
+def logistic_test():
+    logger.info('using logistic regression')
+    logger.info('read model ...')
+    n_components = None
+    Cs = [2**t for t in range(0, 10, 1)]
+    Cs.extend([3**t for t in range(1, 10, 1)])
+    # model = read_model()
+    model = None
+    rte2cosine = RTE2Cosine('/home/junfeng/word2vec/GoogleNews-vectors-negative300.bin')
+    X_train_all = []
+    X_test_all = []
+    train_labels_all = []
+    test_labels_all = []
+    for version in range(1, 4):
+        logger.info('loading version {0} data ...'.format(version))
+        rte_data = rte_utils.read_rte_from_nltk(version=version)
+        train_cosine, test_cosine = rte2cosine.calculate_cosine_features(rte_data, version)
         X_train, X_test, train_labels, test_labels = read_rte_from_nltk(model, version=version)
+        vectorized_train_ts = X_train[:, :4800]
+        vectorized_train_hs = X_train[:, 4800:]
+        X_train = np.abs(vectorized_train_ts - vectorized_train_hs)
+        X_train = np.concatenate([X_train, vectorized_train_ts * vectorized_train_hs], axis=1)
+        X_train = np.concatenate([X_train, train_cosine], axis=1)
+        # train_cosine_similarity = np.concatenate(
+        #         map(pairwise.cosine_similarity, vectorized_train_ts, vectorized_train_hs)
+        # )
+        # X_train = np.concatenate([X_train, train_cosine_similarity], axis=1)
+        vectorized_test_ts = X_test[:, :4800]
+        vectorized_test_hs = X_test[:, 4800:]
+        X_test = np.abs(vectorized_test_ts - vectorized_test_hs)
+        X_test = np.concatenate([X_test, vectorized_test_ts * vectorized_test_hs], axis=1)
+        X_test = np.concatenate([X_test, test_cosine], axis=1)
+        # test_cosine_similarity = np.concatenate(
+        #         map(pairwise.cosine_similarity, vectorized_test_ts, vectorized_test_hs)
+        # )
+        # X_test = np.concatenate([X_test, test_cosine_similarity], axis=1)
+
         X_train_all.append(X_train)
         X_test_all.append(X_test)
         train_labels_all.append(train_labels)
@@ -170,15 +298,16 @@ def logistic_test():
         # logger.info('After PCA')
         # logger.info('X_train.shape: {0}'.format(X_train.shape))
         # logger.info('X_test.shape: {0}'.format(X_test.shape))
-        logreg = LogisticRegression(C=C, n_jobs=10, random_state=919)
+        logreg = LogisticRegressionCV(Cs=Cs, cv=3, n_jobs=10, random_state=919)
         logreg.fit(X_train, train_labels)
+        logger.info('best C is {0}'.format(logreg.C_))
         y_test_predicted = logreg.predict(X_test)
         y_test_proba = logreg.predict_proba(X_test)
         acc = accuracy_score(test_labels, y_test_predicted)
         logger.info('evaluate at RTE {0} dataset'.format(version))
         logger.info('test data predicted accuracy: {0}'.format(acc))
-        logloss = log_loss(test_labels, y_test_proba)
-        logger.info('log loss at test data: {0}'.format(logloss))
+        # logloss = log_loss(test_labels, y_test_proba)
+        # logger.info('log loss at test data: {0}'.format(logloss))
 
     X_train_all = np.concatenate(X_train_all)
     X_test_all = np.concatenate(X_test_all)
@@ -192,16 +321,16 @@ def logistic_test():
     # logger.info('After PCA')
     # logger.info('X_train_all.shape: {0}'.format(X_train_all.shape))
     # logger.info('X_test_all.shape: {0}'.format(X_test_all.shape))
-    logreg = LogisticRegression(C=C, n_jobs=10, random_state=919)
+    logreg = LogisticRegressionCV(Cs=Cs, cv=3, n_jobs=10, random_state=919)
     logreg.fit(X_train_all, train_labels_all)
+    logger.info('best C is {0}'.format(logreg.C_))
     y_test_all_predicted = logreg.predict(X_test_all)
     y_test_all_proba = logreg.predict_proba(X_test_all)
     acc = accuracy_score(test_labels_all, y_test_all_predicted)
     logger.info('evaluate at RTE combined dataset')
     logger.info('test data predicted accuracy: {0}'.format(acc))
-    logloss = log_loss(test_labels_all, y_test_all_proba)
-    logger.info('log loss at test data: {0}'.format(logloss))
-
+    # logloss = log_loss(test_labels_all, y_test_all_proba)
+    # logger.info('log loss at test data: {0}'.format(logloss))
 
 
 def random_forest_test():

@@ -13,8 +13,11 @@ class HomogeneousData():
         self.reset()
 
     def prepare(self):
+        # source
         self.caps = self.data[0]
+        # forward
         self.feats = self.data[1]
+        # backward
         self.feats2 = self.data[2]
 
         # find the unique lengths
@@ -74,6 +77,7 @@ class HomogeneousData():
     def __iter__(self):
         return self
 
+
 def prepare_data(seqs_x, seqs_y, seqs_z, worddict, maxlen=None, n_words=20000):
     """
     Put the data into format useable by the model
@@ -95,7 +99,7 @@ def prepare_data(seqs_x, seqs_y, seqs_z, worddict, maxlen=None, n_words=20000):
     lengths_y = [len(s) for s in seqs_y]
     lengths_z = [len(s) for s in seqs_z]
 
-    if maxlen != None:
+    if maxlen is not None:
         new_seqs_x = []
         new_seqs_y = []
         new_seqs_z = []

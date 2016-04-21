@@ -44,6 +44,7 @@ def load_model():
     uparams = init_params(uoptions)
     uparams = load_params(path_to_umodel, uparams)
     utparams = init_tparams(uparams)
+
     bparams = init_params_bi(boptions)
     bparams = load_params(path_to_bmodel, bparams)
     btparams = init_tparams(bparams)
@@ -52,6 +53,7 @@ def load_model():
     print 'Compiling encoders...'
     embedding, x_mask, ctxw2v = build_encoder(utparams, uoptions)
     f_w2v = theano.function([embedding, x_mask], ctxw2v, name='f_w2v')
+
     embedding, x_mask, ctxw2v = build_encoder_bi(btparams, boptions)
     f_w2v2 = theano.function([embedding, x_mask], ctxw2v, name='f_w2v2')
 
@@ -371,6 +373,7 @@ def gru_layer(tparams, state_below, options, prefix='gru', mask=None, **kwargs):
     """
     nsteps = state_below.shape[0]
     if state_below.ndim == 3:
+        # <n_words, n_samples, dim_word>
         n_samples = state_below.shape[1]
     else:
         n_samples = 1
