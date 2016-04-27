@@ -97,28 +97,47 @@ def build_model(tparams, options):
 
     # compute word probabilities (ahead)
     logit = get_layer('ff')[1](tparams, projf[0], options, prefix='ff_logit', activ='linear')
-    # TODO
     logit_shp = logit.shape
+    # (n_samples, n_timesteps_f, n_words)
+    # softmax, predict word_id
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1], logit_shp[2]]))
 
     # cost (ahead)
+    # just multi-class log loss
+    # log loss = -\frac{1}{N}\sum_{i=1}^N\sum_{j=1}^My_{i,j}\log(p_{i,j})
     y_flat = y.flatten()
     y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words'] + y_flat
+    # add 1e-8 to prevent too small probabilities
     costf = -tensor.log(probs.flatten()[y_flat_idx]+1e-8)
-    costf = costf.reshape([y.shape[0],y.shape[1]])
+    costf = costf.reshape([y.shape[0], y.shape[1]])
+    # mask operation
+    # may be axis=1 is correct to sum errors by the sample sample
+    # but just sum all errors doesn't need correct axis
+    # however, costf = (costf * y_mask).sum() can get the same result
+    # and just one line
     costf = (costf * y_mask).sum(0)
     costf = costf.sum()
 
     # compute word probabilities (behind)
     logit = get_layer('ff')[1](tparams, projb[0], options, prefix='ff_logit', activ='linear')
     logit_shp = logit.shape
+    # (n_samples, n_timesteps_b, n_words)
+    # softmax, predict word_id
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1], logit_shp[2]]))
 
     # cost (behind)
+    # just multi-class log loss
+    # log loss = -\frac{1}{N}\sum_{i=1}^N\sum_{j=1}^My_{i,j}\log(p_{i,j})
     z_flat = z.flatten()
     z_flat_idx = tensor.arange(z_flat.shape[0]) * options['n_words'] + z_flat
+    # add 1e-8 to prevent too small probabilities
     costb = -tensor.log(probs.flatten()[z_flat_idx]+1e-8)
-    costb = costb.reshape([z.shape[0],z.shape[1]])
+    costb = costb.reshape([z.shape[0], z.shape[1]])
+    # mask operation
+    # may be axis=1 is correct to sum errors by the sample sample
+    # but just sum all errors doesn't need correct axis
+    # however, costf = (costf * y_mask).sum() can get the same result
+    # and just one line
     costb = (costb * z_mask).sum(0)
     costb = costb.sum()
 

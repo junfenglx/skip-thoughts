@@ -244,7 +244,6 @@ def build_rte_model(rte_data):
     uoptions['decoder'] = 'gru'
     uparams = init_params(uoptions)
     del uparams['Wemb']
-    # TODO test not use pre-trained weights
     uparams = load_params(path_to_umodel, uparams)
     utparams = init_tparams(uparams)
 
