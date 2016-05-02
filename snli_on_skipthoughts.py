@@ -93,8 +93,8 @@ def unzip(zipped):
 
 
 def prepare(df, table, worddict, options, use_eos=False):
-    df.loc[:, 'text'] = preprocess(df['text'])
-    df.loc[:, 'hypothesis'] = preprocess(df['hypothesis'])
+    df.loc[:, 'text'] = preprocess(df['sentence1'])
+    df.loc[:, 'hypothesis'] = preprocess(df['sentence2'])
 
     seqs_text = []
     seqs_hypothesis = []
@@ -131,7 +131,8 @@ def prepare(df, table, worddict, options, use_eos=False):
         hypothesis_embeddings[:lengths_h[idx],idx] = s_h
         hypothesis_masks[:lengths_h[idx]+1,idx] = 1.
 
-    labels = df['label'].values
+    labels = df['gold_label'] == 'entailment'
+    labels = labels.values.astype(int)
     return text_embeddings, text_masks, hypothesis_embeddings, hypothesis_masks, labels
 
 
@@ -232,7 +233,8 @@ def build_snli_model(train_df, test_df):
     Build the model on saved tables
     """
 
-
+    # TODO
+    raise ValueError('should use saved snli model parameters')
     # Load model options
     print 'Loading uni-skip model parameters...'
     with open('%s.pkl' % path_to_umodel, 'rb') as f:
@@ -304,7 +306,7 @@ def build_snli_model(train_df, test_df):
     n_words = 20000
     dispFreq = 1
     saveFreq = 1000
-    saveto = './rte_toy.npz'
+    saveto = './snli/snli_toy.npz'
 
     words = []
     print('load utable ...')
